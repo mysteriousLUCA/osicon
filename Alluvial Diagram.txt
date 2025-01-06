@@ -1,0 +1,101 @@
+# Load required libraries
+library(readxl)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(ggalluvial)
+library(viridis)
+
+# Step 1: Load the main data
+data <- read_excel("D:/NIO Lab/Conference/OSICON 25/Alpha and beta diversity/All_Cellulases.xlsx")
+
+# Reshape the data into a long format: Site, Category, Count
+long_data <- data %>%
+  pivot_longer(
+    cols = -Site,  # Exclude the 'Site' column
+    names_to = "category",
+    values_to = "count"
+  )
+
+# Step 2: Get sheet names from the condition file
+condition_sheets <- excel_sheets("D:/NIO Lab/Conference/OSICON 25/Alpha and beta diversity/Cellulase_Genus_Count_by_Condition1.xlsx")
+
+# Step 3: Loop through each sheet and load the condition data
+conditions_data_list <- lapply(condition_sheets, function(sheet_name) {
+  raw_conditions <- read_excel("D:/NIO Lab/Conference/OSICON 25/Alpha and beta diversity/Cellulase_Genus_Count_by_Condition1.xlsx", 
+                               sheet = sheet_name, col_names = TRUE)
+  
+  # Extract genus names from columns and site names from rows
+  genus_names <- names(raw_conditions)[-1]  # All columns except the first one are genus names
+  sites <- raw_conditions$Site              # The first column contains the site names
+  condition_values <- raw_conditions[, -1]  # Remove the first column which is for Site
+  
+  # Ensure numeric condition values
+  condition_values_clean <- as.data.frame(condition_values) %>%
+    mutate(across(everything(), ~ as.numeric(as.character(.))))
+  
+  # Convert to long format and add the condition name
+  conditions_data <- condition_values_clean %>%
+    mutate(Site = sites, Condition = sheet_name) %>%
+    pivot_longer(
+      cols = -c(Site, Condition),
+      names_to = "genus_index",
+      values_to = "count"
+    ) %>%
+    mutate(
+      category = genus_names[match(genus_index, names(raw_conditions)[-1])]  # Match genus name
+    ) %>%
+    filter(!is.na(category))  # Remove rows with missing categories
+  
+  return(conditions_data)
+})
+
+# Combine all condition data into one data frame
+conditions_data_combined <- bind_rows(conditions_data_list)
+
+# Normalize conditions to ensure total proportions align
+conditions_data_combined <- conditions_data_combined %>%
+  group_by(Site, category, Condition) %>%
+  mutate(Percent = count / sum(count, na.rm = TRUE)) %>%
+  ungroup()
+
+# Step 4: Merge long_data and conditions_data_combined
+merged_data <- long_data %>%
+  left_join(conditions_data_combined, by = c("Site", "category"))
+
+# Step 5: Join and clean up data for the flow plot
+combined_flow_data <- merged_data %>%
+  filter(!is.na(Percent)) %>%
+  mutate(
+    Site = factor(Site, levels = paste0("M", 1:10)),
+    category = factor(category, levels = sort(unique(category))),
+    Condition = factor(Condition, levels = c("Normal", "Acidic", "Thermolytic", "Acidothermolytic"))
+  )
+
+# Step 6: Create the flow plot with vibrant colors and bold text
+combined_flow <- ggplot(combined_flow_data, aes(axis1 = Site, axis2 = category, axis3 = Condition, y = Percent)) +
+  geom_alluvium(aes(fill = category), width = 0.3) +  # Set alluvium width
+  geom_stratum(width = 0.5) +  # Adjust stratum width
+  geom_text(stat = "stratum", aes(label = after_stat(stratum)), size = 3, hjust = 0.5, vjust = 0.5) +  # Center text
+  scale_fill_viridis(discrete = TRUE, option = "C") +  # Vibrant colors
+  scale_x_discrete(
+    limits = c("Site", "Category", "Condition"),
+    expand = c(0.1, 0.05)  # Adjust spacing between panels
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),  # Bold plot title
+    axis.title.x = element_text(face = "bold"),  # Bold x-axis title
+    axis.title.y = element_text(face = "bold"),  # Bold y-axis title
+    axis.text.x = element_text(angle = 45, hjust = 1, face = "bold"),  # Bold x-axis text
+    axis.text.y = element_text(face = "bold"),  # Bold y-axis text
+    strip.text = element_text(face = "bold")  # Bold text in panel headers
+  ) +
+  labs(
+    title = "Vibrant Combined Flow Plot",
+    x = "",
+    y = "Proportion"
+  )
+
+# Print the adjusted plot
+print(combined_flow)
